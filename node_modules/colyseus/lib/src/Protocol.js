@@ -1,0 +1,169 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const notepack_io_1 = __importDefault(require("notepack.io"));
+const ws_1 = __importDefault(require("ws"));
+const Debug_1 = require("./Debug");
+exports.WS_CLOSE_CONSENTED = 4000;
+// Colyseus protocol codes range between 0~100
+// (msgpack messages are identified on client-side as >100)
+var Protocol;
+(function (Protocol) {
+    // User-related (1~8)
+    Protocol[Protocol["USER_ID"] = 1] = "USER_ID";
+    // Room-related (9~19)
+    Protocol[Protocol["JOIN_REQUEST"] = 9] = "JOIN_REQUEST";
+    Protocol[Protocol["JOIN_ROOM"] = 10] = "JOIN_ROOM";
+    Protocol[Protocol["JOIN_ERROR"] = 11] = "JOIN_ERROR";
+    Protocol[Protocol["LEAVE_ROOM"] = 12] = "LEAVE_ROOM";
+    Protocol[Protocol["ROOM_DATA"] = 13] = "ROOM_DATA";
+    Protocol[Protocol["ROOM_STATE"] = 14] = "ROOM_STATE";
+    Protocol[Protocol["ROOM_STATE_PATCH"] = 15] = "ROOM_STATE_PATCH";
+    // Match-making related (20~29)
+    Protocol[Protocol["ROOM_LIST"] = 20] = "ROOM_LIST";
+    // Generic messages (50~60)
+    Protocol[Protocol["BAD_REQUEST"] = 50] = "BAD_REQUEST";
+    // WebSocket error codes
+    Protocol[Protocol["WS_SERVER_DISCONNECT"] = 4201] = "WS_SERVER_DISCONNECT";
+    Protocol[Protocol["WS_TOO_MANY_CLIENTS"] = 4202] = "WS_TOO_MANY_CLIENTS";
+})(Protocol = exports.Protocol || (exports.Protocol = {}));
+// Inter-process communication protocol
+var IpcProtocol;
+(function (IpcProtocol) {
+    IpcProtocol[IpcProtocol["SUCCESS"] = 0] = "SUCCESS";
+    IpcProtocol[IpcProtocol["ERROR"] = 1] = "ERROR";
+    IpcProtocol[IpcProtocol["TIMEOUT"] = 2] = "TIMEOUT";
+})(IpcProtocol = exports.IpcProtocol || (exports.IpcProtocol = {}));
+function decode(message) {
+    try {
+        message = notepack_io_1.default.decode(Buffer.from(message));
+    }
+    catch (e) {
+        Debug_1.debugAndPrintError(`message couldn't be decoded: ${message}\n${e.stack}`);
+        return;
+    }
+    return message;
+}
+exports.decode = decode;
+exports.send = {
+    [Protocol.USER_ID]: (client) => {
+        const buff = Buffer.allocUnsafe(1 + utf8Length(client.id));
+        buff.writeUInt8(Protocol.USER_ID, 0);
+        utf8Write(buff, 1, client.id);
+        client.send(buff, { binary: true });
+    },
+    [Protocol.JOIN_ERROR]: (client, message) => {
+        const buff = Buffer.allocUnsafe(1 + utf8Length(message));
+        buff.writeUInt8(Protocol.JOIN_ERROR, 0);
+        utf8Write(buff, 1, message);
+        client.send(buff, { binary: true });
+    },
+    [Protocol.JOIN_REQUEST]: (client, requestId, roomId) => {
+        /**
+         * TODO: reset `requestId` to `0` on client-side once it reaches `127`
+         */
+        const buff = Buffer.allocUnsafe(1 + 1 + utf8Length(roomId));
+        buff.writeUInt8(Protocol.JOIN_REQUEST, 0);
+        buff.writeUInt8(requestId, 1);
+        utf8Write(buff, 2, roomId);
+        client.send(buff, { binary: true });
+    },
+    [Protocol.JOIN_ROOM]: (client, sessionId, serializerId, handshake) => {
+        let offset = 0;
+        const sessionIdLength = utf8Length(sessionId);
+        const serializerIdLength = utf8Length(serializerId);
+        const handshakeLength = (handshake) ? handshake.length : 0;
+        const buff = Buffer.allocUnsafe(1 + sessionIdLength + serializerIdLength + handshakeLength);
+        buff.writeUInt8(Protocol.JOIN_ROOM, 0);
+        offset += 1;
+        utf8Write(buff, offset, sessionId);
+        offset += sessionIdLength;
+        utf8Write(buff, offset, serializerId);
+        offset += serializerIdLength;
+        if (handshake) {
+            for (let i = 0, l = handshake.length; i < l; i++) {
+                buff.writeUInt8(handshake[i], offset++);
+            }
+        }
+        client.send(buff, { binary: true });
+    },
+    [Protocol.ROOM_STATE]: (client, bytes) => {
+        /**
+         * TODO: this is only supporting SchemaSerializer.
+         * It should support FossilDeltaSerializer as well.
+         */
+        if (client.readyState === ws_1.default.OPEN) {
+            client.send(Buffer.alloc(1, Protocol.ROOM_STATE), { binary: true });
+            client.send(bytes, { binary: true });
+        }
+    },
+    [Protocol.ROOM_STATE_PATCH]: (client, bytes) => {
+        if (client.readyState === ws_1.default.OPEN) {
+            client.send(Buffer.alloc(1, Protocol.ROOM_STATE_PATCH), { binary: true });
+            client.send(bytes, { binary: true });
+        }
+    },
+    [Protocol.ROOM_DATA]: (client, data, encode = true) => {
+        if (client.readyState === ws_1.default.OPEN) {
+            client.send(Buffer.alloc(1, Protocol.ROOM_DATA), { binary: true });
+            client.send(encode && notepack_io_1.default.encode(data) || data, { binary: true });
+        }
+    },
+    [Protocol.ROOM_LIST]: (client, requestId, rooms) => {
+        client.send(Buffer.alloc(1, Protocol.ROOM_LIST), { binary: true });
+        client.send(notepack_io_1.default.encode([requestId, rooms]), { binary: true });
+    },
+};
+function utf8Write(buff, offset, str = '') {
+    buff[offset++] = utf8Length(str) - 1;
+    let c = 0;
+    for (let i = 0, l = str.length; i < l; i++) {
+        c = str.charCodeAt(i);
+        if (c < 0x80) {
+            buff[offset++] = c;
+        }
+        else if (c < 0x800) {
+            buff[offset++] = 0xc0 | (c >> 6);
+            buff[offset++] = 0x80 | (c & 0x3f);
+        }
+        else if (c < 0xd800 || c >= 0xe000) {
+            buff[offset++] = 0xe0 | (c >> 12);
+            buff[offset++] = 0x80 | (c >> 6) & 0x3f;
+            buff[offset++] = 0x80 | (c & 0x3f);
+        }
+        else {
+            i++;
+            c = 0x10000 + (((c & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
+            buff[offset++] = 0xf0 | (c >> 18);
+            buff[offset++] = 0x80 | (c >> 12) & 0x3f;
+            buff[offset++] = 0x80 | (c >> 6) & 0x3f;
+            buff[offset++] = 0x80 | (c & 0x3f);
+        }
+    }
+}
+exports.utf8Write = utf8Write;
+// Faster for short strings than Buffer.byteLength
+function utf8Length(str = '') {
+    let c = 0;
+    let length = 0;
+    for (let i = 0, l = str.length; i < l; i++) {
+        c = str.charCodeAt(i);
+        if (c < 0x80) {
+            length += 1;
+        }
+        else if (c < 0x800) {
+            length += 2;
+        }
+        else if (c < 0xd800 || c >= 0xe000) {
+            length += 3;
+        }
+        else {
+            i++;
+            length += 4;
+        }
+    }
+    return length + 1;
+}
+exports.utf8Length = utf8Length;

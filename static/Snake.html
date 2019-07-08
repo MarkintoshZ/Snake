@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width" />
+
+    <style>
+      body { font-family: Tahoma, Geneva, sans-serif; text-align: center; }
+    </style>
+
+    <!-- colyseus.js client -->
+    <!-- <script type="text/javascript" src="https://raw.githack.com/colyseus/colyseus.js/master/dist/colyseus.js"></script> -->
+    <script type="text/javascript" src="colyseus.js"></script>
+
+    <style type="text/css">
+      .snakeBlock {
+        width: 10px;
+        height: 10px;
+        position: absolute;
+        /* padding-top: 24px; */
+        /* box-sizing: border-box; */
+        /* left: 0; */
+        /* top: 0; */
+      }
+
+      .foodBlock {
+      width: 12px;
+      height: 12px;
+      position: absolute;
+      /* padding-top: 24px; */
+      /* box-sizing: border-box; */
+      left: 0;
+      top: 0;
+      }
+
+      .background {
+        width: 100%;
+        /* padding-top: 56.25%; */
+        background-color: antiquewhite;
+      }
+    </style>
+
+  </head>
+  <body>
+    <!-- <div class='background' id='bg'></div> -->
+
+    <script>
+      // Colyseus
+      var host = window.document.location.host.replace(/:.*/, '');
+
+      var client = new Colyseus.Client(location.protocol.replace("http", "ws") + host + (location.port ? ':' + location.port : ''));
+      var room = client.join("snake_server");
+
+      // layout
+      var width, height, gridW, margin;
+
+      // Players
+      var players = {};
+      var colors = ['red', 'green', 'blue', 'magenta'];
+      var direction = Math.floor(Math.random() * 4);
+
+      // Foods
+      var foodContainer;
+      var foodSprites = ['banana.jpg', 'grape.jpg', 'cherry.jpg'];
+
+      window.onload = () => {
+        var bg = document.getElementById('bg');
+
+        var updateBgSize = () => {
+          width = bg.clientWidth;
+          height = width * 35 /50;
+          bg.style.height = height + 'px'
+          console.log(width, height);
+          // w: width of the grid block 
+          // n: gridn 
+          // p: percent of w of block is margin
+          // w = 1 / (n + np - p)
+          var p = 0.1;
+          gridW = width / (50 + 50 * p - p);
+          margin = gridW * 0.1;
+        }
+
+        bg.onresize = updateBgSize;
+
+        updateBgSize();
+      }
+
+      var createSnake = (player, sessionId) => {
+        // assign container id
+        var container = document.createElement("div");
+          container.id = sessionId;
+          document.body.appendChild(container);
+
+          var snake = [];
+
+          for (const block of player.body) {
+            var dom = document.createElement("div");
+            dom.className = "snakeBlock";
+            dom.style.left = block.x * 11 + 2 + "px";
+            dom.style.top = block.y * 11 - 1 + "px";
+            // dom.style.left = (block.x * gridW + (block.x - 1) * margin) + 'px';
+            // dom.style.top = (block.y * gridW + (block.y - 1) * margin) + 'px';
+            // dom.style.width = gridW + 'px';
+            // dom.style.height = gridW + 'px';
+            dom.style.background = player.color;
+            // dom.innerHTML = "Player " + sessionId;
+
+            container.appendChild(dom);
+
+            snake.push(dom);
+          }
+          // console.log(gridW, margin);
+          players[sessionId] = container;
+      }
+
+      var createFoods = (f) => {
+        // assign container id
+        foodContainer = document.createElement("div");
+        foodContainer.id = 'Foods';
+
+        var foods = [];
+
+        for (const block of f) {
+          var dom = document.createElement("img");
+          dom.className = "foodBlock";
+          dom.style.left = block.x * 11 + "px";
+          dom.style.top = block.y * 11 + "px";
+          dom.src = foodSprites[block.reward - 1];
+          // dom.style.background = 'black';
+          // dom.innerHTML = "Player " + sessionId;
+
+          foodContainer.appendChild(dom);
+        }
+
+        document.body.appendChild(foodContainer);
+      }
+
+      room.onJoin.add(function() {
+        // listen to patches coming from the server
+        room.state.players.onAdd = function(player, sessionId) {
+          createSnake(player, sessionId);
+          room.send( { direction: direction} );
+
+          player.alive.onAdd = e => {
+            console.log(1);
+          }
+        }
+
+        room.state.players.onRemove = function(player, sessionId) {
+          document.body.removeChild(players[sessionId]);
+          delete players[sessionId];
+        }
+
+        room.state.players.onChange = function (player, sessionId) {
+          document.body.removeChild(players[sessionId]);
+          createSnake(player, sessionId);
+        }
+
+        room.state.foods.onChange = (food) => { 
+
+          let foodsDiv = document.getElementById('Foods');
+          if (foodsDiv)
+            document.body.removeChild(foodsDiv);
+          
+          createFoods(room.state.foods.foods);
+        }
+      });
+
+      window.addEventListener("keydown", function (e) {
+        // console.log(e.which);
+        if (e.which === 38 || e.which === 87) {
+          up();
+
+        } else if (e.which === 39 || e.which === 68) {
+          right();
+
+        } else if (e.which === 40 || e.which === 83) {
+          down();
+
+        } else if (e.which === 37 || e.which === 65) {
+          left();
+        }
+      });
+
+      function up () {
+        if (direction !== 2)
+          room.send({ direction: 0 });
+          direction = 0;
+      }
+
+      function right () {
+        if (direction !== 3)
+          room.send({ direction: 1 });
+          direction = 1;
+      }
+
+      function down () {
+        if (direction !== 0)
+          room.send({ direction: 2 });
+          direction = 2;
+      }
+
+      function left () {
+        if (direction !== 1)
+          room.send({ direction: 3 });
+          direction = 3;
+      }
+
+    </script>
+  </body>
+</html>
