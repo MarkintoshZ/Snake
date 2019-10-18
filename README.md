@@ -1,7 +1,7 @@
 <div align="center">
-  <h3>
+  <h1>
     <a href="snakin.herokuapp.com/">Snakin</a>
-  </h3>
+  </h1>
 </div>
 
 On this repository you can find basic usage examples of how to use Colyseus along with the JavaScript client with the simple yet classic game snake
